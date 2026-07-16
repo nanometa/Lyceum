@@ -1,7 +1,7 @@
 import { createClient, createAccount } from "genlayer-js";
 import { testnetBradbury } from "genlayer-js/chains";
 import { TransactionStatus, TransactionHashVariant } from "genlayer-js/types";
-import { CONTRACT_ADDRESS, GENLAYER_NETWORK } from "./chain";
+import { CONTRACT_ADDRESS, GENLAYER_CHAIN_ID, GENLAYER_RPC_URL } from "./chain";
 
 type Hex = `0x${string}`;
 const TIMEOUT_MS = 600_000;
@@ -23,10 +23,41 @@ export interface Credential { issued: boolean; submissionId: number; author: str
 export interface Stats { nextId: number; totalSubmissions: number; totalAccepted: number; totalRejected: number; totalRounds: number; maxRounds: number; acceptMin: number; minorMin: number; majorMin: number; }
 
 function readClient() { return createClient({ chain: testnetBradbury, account: createAccount() }); }
+
+type Eip1193Provider = {
+  request(args: { method: string; params?: unknown[] | object }): Promise<unknown>;
+};
+
+async function ensureStandardEvmNetwork(provider: Eip1193Provider) {
+  const chainId = `0x${GENLAYER_CHAIN_ID.toString(16)}`;
+  const currentChainId = await provider.request({ method: "eth_chainId" });
+  if (currentChainId === chainId) return;
+
+  try {
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId }],
+    });
+  } catch (error: any) {
+    if (error?.code !== 4902) throw error;
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [{
+        chainId,
+        chainName: "GenLayer Bradbury",
+        nativeCurrency: { name: "GEN", symbol: "GEN", decimals: 18 },
+        rpcUrls: [GENLAYER_RPC_URL],
+        blockExplorerUrls: ["https://explorer-bradbury.genlayer.com"],
+      }],
+    });
+  }
+}
+
 async function writeClient(account: Hex) {
-  const c = createClient({ chain: testnetBradbury, account });
-  await c.connect(GENLAYER_NETWORK);
-  return c;
+  const provider = (window as Window & { ethereum?: Eip1193Provider }).ethereum;
+  if (!provider) throw new Error("No standard EVM wallet was detected.");
+  await ensureStandardEvmNetwork(provider);
+  return createClient({ chain: testnetBradbury, account, provider });
 }
 async function waitAccepted(client: any, hash: Hex) {
   let timer: ReturnType<typeof setTimeout> | undefined;
